@@ -1,0 +1,11 @@
+[package]
+name = "ObjRigger"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+debug = []
+
+[dependencies]
+rfd = "0.15.2"
+tobj="4.0.3"
