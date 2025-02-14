@@ -8,6 +8,7 @@ use tobj::LoadOptions;
 const BLENDER_TRANSFORM: Matrix3<f64> = Matrix3::new(1f64, 0f64, 0f64, 0f64, 0f64, 1f64, 0f64, -1f64, 0f64);
 
 
+#[derive(Clone)]
 struct PointDist {
 	point: Vector3<f64>,
 	dist: f64,
@@ -26,13 +27,13 @@ fn main() {
 	let (obj, reference) = if args.len() < 3 {
 		let obj = rfd::FileDialog::new()
 			.add_filter("Wavefront .obj", &[".obj"])
-			.set_title("Un-rigged obj")
+			.set_title("Obj to move")
 			.pick_file();
 		if obj.is_none() { return }
 
 		let reference = rfd::FileDialog::new()
 			.add_filter("Wavefront .obj", &[".obj"])
-			.set_title("Rigged (reference) obj")
+			.set_title("Reference obj")
 			.pick_file();
 		if reference.is_none() { return }
 
@@ -58,7 +59,7 @@ fn main() {
 		}
 	};
 
-	for model in &obj_data {
+	'model: for model in &obj_data {
 		let ref_model = match ref_data.iter().find(|x| x.name == model.name) {
 			Some(m) => m,
 			None => {
@@ -90,15 +91,38 @@ fn main() {
 		let model_local_point_dists = get_point_dists(&model_verts, &model_center);
 		let ref_local_point_dists = get_point_dists(&ref_verts, &ref_center);
 
-		if model_local_point_dists[0] != ref_local_point_dists[0] { println!("Model \"{}\" is scaled differently than its reference counterpart or has different vertices | {:?}, {:?}", model.name, model_local_point_dists[0].dist, ref_local_point_dists[0].dist); }
+		let furthest_model = model_local_point_dists[0].clone();
+		let furthest_ref = ref_local_point_dists[0].clone();
 
-		let local_rot = Rotation3::rotation_between(&(model_local_point_dists[0].point - model_center), &(ref_local_point_dists[0].point - ref_center)).unwrap(); // TODO: Gracefully handle error
-		let ref_origin: Vector3<f64> = ref_center - local_rot * model_center;
+		let mut i = 1;
+		let (mut second_model, second_ref) = loop {
+			if i >= model_local_point_dists.len() {
+				println!("Model \"{}\" has all vertices on one line", model.name);
+				continue 'model;
+			}
+
+			let second_model = model_local_point_dists[i].clone();
+			let second_ref = ref_local_point_dists[i].clone();
+
+			if second_model.point.cross(&furthest_model.point).norm_squared() > 0.000_000_000_1 && second_ref.point.cross(&furthest_ref.point).norm_squared() > 0.000_000_000_1 {
+				break (second_model, second_ref);
+			}
+			i += 1;
+		};
+
+		if furthest_model != furthest_ref || second_model != second_ref { println!("Model \"{}\" is scaled differently than its reference counterpart or has different vertices | {:?}, {:?}", model.name, model_local_point_dists[0].dist, ref_local_point_dists[0].dist); }
+
+		// Rotate vec1 to be aligned
+		let local_rot = Rotation3::rotation_between(&(furthest_model.point), &(furthest_ref.point)).unwrap(); // TODO: Gracefully handle error
+		second_model.point = local_rot * second_model.point;
+
+		let roll_rot = Rotation3::rotation_between(&(second_model.point), &(second_ref.point)).unwrap();
+		let ref_origin: Vector3<f64> = ref_center - roll_rot * local_rot * model_center;
 
 		let model_origin_point_dists = get_point_dists(&model_verts, &Vector3::zeros());
 		let ref_origin_point_dists = get_point_dists(&ref_verts, &ref_origin);
 
-		let global_rot = Rotation3::rotation_between(&model_origin_point_dists[0].point, &(ref_origin_point_dists[0].point - ref_origin)).unwrap(); // TODO: Gracefully handle error
+		let global_rot = Rotation3::rotation_between(&model_origin_point_dists[0].point, &(ref_origin_point_dists[0].point)).unwrap(); // TODO: Gracefully handle error
 
 		let eulers = global_rot.euler_angles();
 
@@ -146,7 +170,7 @@ fn clamp_floating_error(val: f64) -> f64 {
 fn get_point_dists(verts: &Vec<Vector3<f64>>, center: &Vector3<f64>) -> Vec<PointDist> {
 	let mut out = Vec::with_capacity(verts.len());
 	for vert in verts {
-		out.push(PointDist { point: vert.clone(), dist: (center - vert).norm_squared()})
+		out.push(PointDist { point: vert - center, dist: (center - vert).norm_squared()})
 	}
 
 	out.sort_by(|a, b | b.dist.total_cmp(&a.dist));
