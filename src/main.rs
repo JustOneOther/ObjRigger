@@ -1,12 +1,9 @@
 #[cfg(not(feature = "debug"))]
-use std::env::args;
+use std::{ env::args, fs::File, io::Write, thread::sleep, time::Duration};
 #[cfg(feature = "debug")]
 use std::env::vars;
-use std::fs::File;
-use std::io::Write;
+
 use std::path::PathBuf;
-use std::thread::sleep;
-use std::time::Duration;
 use nalgebra::{Rotation3, Vector3};
 use tobj::LoadOptions;
 
@@ -124,43 +121,52 @@ fn main() {
 			(Vector3::new(0f64, 0f64, 0f64), (0f64, 0f64, 0f64), Rotation3::identity())
 		};
 
+		#[cfg(feature = "debug")]
+		let pre_transform_verts = get_avg_delta(&model_verts, &ref_verts);
+
 		for i in 0..model_verts.len() {
 			model_verts[i] = global_transform * model_verts[i] + ref_origin;
 		}
 
-		output += format!("[{}]", model.name).as_str();
-		output += format!("Position={},{},{}", ref_origin.x, ref_origin.y, ref_origin.z).as_str();
-		output += format!("Rotation={},{},{}\n", global_angle.0.to_degrees(), global_angle.1.to_degrees(), global_angle.2.to_degrees()).as_str();
+		output += format!("[{}]\n", model.name).as_str();
+		output += format!("Position={},{},{}\n", ref_origin.x, ref_origin.y, ref_origin.z).as_str();
+		output += format!("Rotation={},{},{}\n\n", global_angle.0.to_degrees(), global_angle.1.to_degrees(), global_angle.2.to_degrees()).as_str();
 
 		#[cfg(feature = "debug")]
 		{
-			println!("blender origin: {:?}", BLENDER_TRANSFORM * ref_origin);
-			println!("Blender Position={},{},{}", ref_origin.x, -ref_origin.z, ref_origin.y);
-			println!("Blender Rotation={},{},{}", global_angle.0.to_degrees(), -global_angle.2.to_degrees(), global_angle.1.to_degrees());
-			println!("Average point delta: {}", get_avg_delta(&model_verts, &ref_verts));
+			output += format!("Origin: {:?}\n", ref_origin).as_str();
+			output += format!("Blender Position={},{},{}\n", ref_origin.x, -ref_origin.z, ref_origin.y).as_str();
+			output += format!("Blender Rotation={},{},{}\n", global_angle.0.to_degrees(), -global_angle.2.to_degrees(), global_angle.1.to_degrees()).as_str();
+			output += format!("Average point delta: {}\n", get_avg_delta(&model_verts, &ref_verts)).as_str();
+			output += format!("Average point delta pre-transform: {}\n\n", pre_transform_verts).as_str();
+			println!("{}", output);
+			output = String::new();
 		}
 	}
 
-	let mut out = match File::create("output.txt") {
-		Ok(f) => f,
-		Err(e) => {
-			println!("Failed to open output file: {}\nWaiting for 30 seconds, copy results now.", e);
-			sleep(Duration::from_secs(30));
-			return;
-		}
-	};
+	#[cfg(not(feature = "debug"))]
+	{
+		let mut out = match File::create("output.txt") {
+			Ok(f) => f,
+			Err(e) => {
+				println!("Failed to open output file: {}\nWaiting for 30 seconds, copy results now.", e);
+				sleep(Duration::from_secs(30));
+				return;
+			}
+		};
 
-	match out.write_all(output.as_bytes()) {
-		Ok(_) => {},
-		Err(e) => {
-			println!("Failed to write to output file: {}\nWaiting for 30 seconds, copy results now.", e);
-			sleep(Duration::from_secs(30));
-			return;
+		match out.write_all(output.as_bytes()) {
+			Ok(_) => {},
+			Err(e) => {
+				println!("Failed to write to output file: {}\nWaiting for 30 seconds, copy results now.", e);
+				sleep(Duration::from_secs(30));
+				return;
+			}
 		}
+
+		println!("Outputted result to file \"output.txt\", this window will remain open for thirty seconds for you to copy the results manually.");
+		sleep(Duration::from_secs(30));
 	}
-
-	println!("Outputted result to file \"output.txt\", this window will remain open for thirty seconds for you to copy the results manually.");
-	sleep(Duration::from_secs(30));
 }
 
 
