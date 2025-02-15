@@ -1,11 +1,13 @@
+#[cfg(not(feature = "debug"))]
 use std::env::args;
+#[cfg(feature = "debug")]
 use std::env::vars;
 use std::path::PathBuf;
-use nalgebra::{Matrix3, Rotation3, Vector3};
+use nalgebra::{Rotation3, Vector3};
 use tobj::LoadOptions;
 
 
-const BLENDER_TRANSFORM: Matrix3<f64> = Matrix3::new(1f64, 0f64, 0f64, 0f64, 0f64, 1f64, 0f64, -1f64, 0f64);
+const FLOATING_TOLERANCE: f64 = 1e-10;
 
 
 #[derive(Clone)]
@@ -14,32 +16,28 @@ struct PointDist {
 	dist: f64,
 }
 
-impl PartialEq for PointDist {
-	fn eq(&self, other: &Self) -> bool {
-		(self.dist - other.dist).abs() < 0.000_000_1f64
-	}
-}
 
 
 fn main() {
+	#[cfg(not(feature = "debug"))]
 	let args = args().collect::<Vec<String>>();
 	#[cfg(not(feature = "debug"))]
 	let (obj, reference) = if args.len() < 3 {
 		let obj = rfd::FileDialog::new()
-			.add_filter("Wavefront .obj", &[".obj"])
+			.add_filter("Wavefront .obj", &["obj"])
 			.set_title("Obj to move")
 			.pick_file();
 		if obj.is_none() { return }
 
 		let reference = rfd::FileDialog::new()
-			.add_filter("Wavefront .obj", &[".obj"])
+			.add_filter("Wavefront .obj", &["obj"])
 			.set_title("Reference obj")
 			.pick_file();
 		if reference.is_none() { return }
 
 		(obj.unwrap(), reference.unwrap())
 	} else {
-		(PathBuf::from(args[1]), PathBuf::from(args[2]))
+		(PathBuf::from(args[1].clone()), PathBuf::from(args[2].clone()))
 	};
 	#[cfg(feature = "debug")]
 	let (obj, reference) = (PathBuf::from(vars().find(|x| x.0 == "target").unwrap().1), PathBuf::from(vars().find(|x| x.0 == "ref").unwrap().1));
@@ -59,7 +57,7 @@ fn main() {
 		}
 	};
 
-	'model: for model in &obj_data {
+	for model in &obj_data {
 		let ref_model = match ref_data.iter().find(|x| x.name == model.name) {
 			Some(m) => m,
 			None => {
@@ -85,85 +83,50 @@ fn main() {
 			ref_verts.push(Vector3::new(ref_model.mesh.positions[i] as f64, ref_model.mesh.positions[i + 1] as f64, ref_model.mesh.positions[i + 2] as f64));
 		}
 
-		let model_center = get_avg_points(&model_verts);
-		let ref_center = get_avg_points(&ref_verts);
+		let (ref_origin, global_angle, global_transform): (Vector3<f64>, (f64, f64, f64), Rotation3<f64>) = if !(get_avg_delta(&model_verts, &ref_verts) < FLOATING_TOLERANCE) {
+			let model_centroid = get_avg_point(&model_verts);
+			let ref_centroid = get_avg_point(&ref_verts);
 
-		let model_local_point_dists = get_point_dists(&model_verts, &model_center);
-		let ref_local_point_dists = get_point_dists(&ref_verts, &ref_center);
+			let model_local_points = get_point_dists(&model_verts, &model_centroid);
+			let ref_local_points = get_point_dists(&ref_verts, &ref_centroid);
 
-		let furthest_model = model_local_point_dists[0].clone();
-		let furthest_ref = ref_local_point_dists[0].clone();
+			let local_transform = match_planar_rotation(model_local_points, ref_local_points).unwrap(); // TODO: Handle error gracefully
 
-		let mut i = 1;
-		let (mut second_model, second_ref) = loop {
-			if i >= model_local_point_dists.len() {
-				println!("Model \"{}\" has all vertices on one line", model.name);
-				continue 'model;
-			}
+			let ref_origin = ref_centroid - local_transform * model_centroid;
 
-			let second_model = model_local_point_dists[i].clone();
-			let second_ref = ref_local_point_dists[i].clone();
+			let model_origin_points = get_point_dists(&model_verts, &Vector3::new(0f64, 0f64, 0f64));
+			let ref_origin_points = get_point_dists(&ref_verts, &ref_origin);
 
-			if second_model.point.cross(&furthest_model.point).norm_squared() > 0.000_000_000_1 && second_ref.point.cross(&furthest_ref.point).norm_squared() > 0.000_000_000_1 {
-				break (second_model, second_ref);
-			}
-			i += 1;
+			let global_transform = match_planar_rotation(model_origin_points, ref_origin_points).unwrap(); // TODO: Handle error gracefully
+			let global_angle = global_transform.euler_angles();
+			(ref_origin, global_angle, global_transform)
+		} else {
+			(Vector3::new(0f64, 0f64, 0f64), (0f64, 0f64, 0f64), Rotation3::identity())
 		};
 
-		if furthest_model != furthest_ref || second_model != second_ref { println!("Model \"{}\" is scaled differently than its reference counterpart or has different vertices | {:?}, {:?}", model.name, model_local_point_dists[0].dist, ref_local_point_dists[0].dist); }
-
-		// Rotate vec1 to be aligned
-		let local_rot = Rotation3::rotation_between(&(furthest_model.point), &(furthest_ref.point)).unwrap(); // TODO: Gracefully handle error
-		second_model.point = local_rot * second_model.point;
-
-		let roll_rot = Rotation3::rotation_between(&(second_model.point), &(second_ref.point)).unwrap();
-		let ref_origin: Vector3<f64> = ref_center - roll_rot * local_rot * model_center;
-
-		let model_origin_point_dists = get_point_dists(&model_verts, &Vector3::zeros());
-		let ref_origin_point_dists = get_point_dists(&ref_verts, &ref_origin);
-
-		let global_rot = Rotation3::rotation_between(&model_origin_point_dists[0].point, &(ref_origin_point_dists[0].point)).unwrap(); // TODO: Gracefully handle error
-
-		let eulers = global_rot.euler_angles();
-
 		for i in 0..model_verts.len() {
-			model_verts[i] = global_rot * model_verts[i];
+			model_verts[i] = global_transform * model_verts[i] + ref_origin;
 		}
-
-		let delta = (ref_origin).map(|x| clamp_floating_error(x));
 
 		println!("[{}]", model.name);
-		println!("Position={},{},{}", delta[0], delta[1], delta[2]);
-		println!("Rotation={},{},{}", eulers.0.to_degrees(), eulers.1.to_degrees(), eulers.2.to_degrees());
-		#[cfg(feature = "blender")]
-		{
-			println!("blender local rot: {}, {}, {}", local_rot.euler_angles().0.to_degrees(), -local_rot.euler_angles().2.to_degrees(), local_rot.euler_angles().1.to_degrees());
-			println!("blender origin: {:?}", BLENDER_TRANSFORM * ref_origin);
-			println!("Blender Position={},{},{}", delta[0], -delta[2], delta[1]);
-			println!("Blender Rotation={},{},{}", eulers.0.to_degrees(), -eulers.2.to_degrees(), eulers.1.to_degrees());
-		}
+		println!("Position={},{},{}", ref_origin.x, ref_origin.y, ref_origin.z);
+		println!("Rotation={},{},{}\n", global_angle.0.to_degrees(), global_angle.1.to_degrees(), global_angle.2.to_degrees());
+
 		#[cfg(feature = "debug")]
 		{
+			println!("blender origin: {:?}", BLENDER_TRANSFORM * ref_origin);
+			println!("Blender Position={},{},{}", ref_origin.x, -ref_origin.z, ref_origin.y);
+			println!("Blender Rotation={},{},{}", global_angle.0.to_degrees(), -global_angle.2.to_degrees(), global_angle.1.to_degrees());
 			println!("Average point delta: {}", get_avg_delta(&model_verts, &ref_verts));
 		}
 	}
 }
 
 
-fn get_avg_points(verts: &Vec<Vector3<f64>>) -> Vector3<f64> {
-	let mut out = Vector3::zeros();
-	let len = verts.len() as f64;
-	for vert in verts {
-		out += vert;
-	}
-	out /= len;
+fn get_avg_point(verts: &Vec<Vector3<f64>>) -> Vector3<f64> {
+	let mut out = verts.iter().sum::<Vector3<f64>>();
+	out /= verts.len() as f64;
 	out
-}
-
-
-fn clamp_floating_error(val: f64) -> f64 {
-	if -0.000_000_000_000_1 <= val && val <= 0.000_000_000_000_1 { return 0f64 }
-	val
 }
 
 
@@ -172,8 +135,7 @@ fn get_point_dists(verts: &Vec<Vector3<f64>>, center: &Vector3<f64>) -> Vec<Poin
 	for vert in verts {
 		out.push(PointDist { point: vert - center, dist: (center - vert).norm_squared()})
 	}
-
-	out.sort_by(|a, b | b.dist.total_cmp(&a.dist));
+	out.sort_by(|a, b | a.dist.total_cmp(&b.dist));
 	out
 }
 
@@ -188,4 +150,46 @@ fn get_avg_delta(verts: &Vec<Vector3<f64>>, ref_verts: &Vec<Vector3<f64>>) -> f6
 	}
 	out /= len;
 	out
+}
+
+
+fn match_planar_rotation(mut model_points: Vec<PointDist>, mut ref_points: Vec<PointDist>) -> Option<Rotation3<f64>> {
+
+	let first_model = find_nonconflicting_point(&mut model_points)?;
+
+	let first_ref = find_nonconflicting_point(&mut ref_points)?;
+
+	let (model_cross, ref_cross) = loop {
+		let second_model = find_nonconflicting_point(&mut model_points)?;
+		let second_ref = find_nonconflicting_point(&mut ref_points)?;
+
+		let model_cross = first_model.point.cross(&second_model.point);
+		let ref_cross = first_ref.point.cross(&second_ref.point);
+		if model_cross.norm_squared() > FLOATING_TOLERANCE { break (model_cross, ref_cross) }
+	};
+
+	let orientation = Rotation3::rotation_between(&model_cross, &ref_cross)?;
+	let rotated_first_model: Vector3<f64> = orientation * first_model.point;
+	let roll = Rotation3::rotation_between(&rotated_first_model, &first_ref.point)?;
+
+	Some(roll * orientation)
+}
+
+
+fn find_nonconflicting_point(points: &mut Vec<PointDist>) -> Option<PointDist> {
+	let mut out = points.pop()?;
+	loop {
+		let mut conflicting = false;
+		loop {
+			if (out.dist - points.last()?.dist).abs() < FLOATING_TOLERANCE {
+				out = points.pop()?;
+				conflicting = true;
+			} else {
+				break;
+			}
+		}
+		if !conflicting {
+			return Some(out);
+		}
+	}
 }

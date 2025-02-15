@@ -9,6 +9,5 @@ blender = []
 
 [dependencies]
 nalgebra = "0.33.2"
-simba = "0.9.0"
 rfd = "0.15.2"
 tobj="4.0.3"
