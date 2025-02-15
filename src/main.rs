@@ -90,16 +90,30 @@ fn main() {
 			let model_local_points = get_point_dists(&model_verts, &model_centroid);
 			let ref_local_points = get_point_dists(&ref_verts, &ref_centroid);
 
-			let local_transform = match_planar_rotation(model_local_points, ref_local_points).unwrap(); // TODO: Handle error gracefully
+			let local_transform = match match_planar_rotation(model_local_points, ref_local_points) {
+				Some(A) => A,
+				None => {
+					println!("Unable to construct transformation matrix for model {}\n", model.name);
+					continue
+				}
+			};
 
 			let ref_origin = ref_centroid - local_transform * model_centroid;
 
 			let model_origin_points = get_point_dists(&model_verts, &Vector3::new(0f64, 0f64, 0f64));
 			let ref_origin_points = get_point_dists(&ref_verts, &ref_origin);
 
-			let global_transform = match_planar_rotation(model_origin_points, ref_origin_points).unwrap(); // TODO: Handle error gracefully
+			let global_transform = match match_planar_rotation(model_origin_points, ref_origin_points) {
+				Some(A) => A,
+				None => {
+					println!("Unable to construct transformation matrix for model {}\n", model.name);
+					continue
+				}
+			};
+
 			let global_angle = global_transform.euler_angles();
 			(ref_origin, global_angle, global_transform)
+
 		} else {
 			(Vector3::new(0f64, 0f64, 0f64), (0f64, 0f64, 0f64), Rotation3::identity())
 		};
