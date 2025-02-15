@@ -1,8 +1,7 @@
 #[cfg(not(feature = "debug"))]
-use std::{ env::args, fs::File, io::Write, thread::sleep, time::Duration};
+use std::{ env::args, fs::File, io::Write, thread::sleep, time::Duration };
 #[cfg(feature = "debug")]
 use std::env::vars;
-
 use std::path::PathBuf;
 use nalgebra::{Rotation3, Vector3};
 use tobj::LoadOptions;
@@ -16,7 +15,6 @@ struct PointDist {
 	point: Vector3<f64>,
 	dist: f64,
 }
-
 
 
 fn main() {
