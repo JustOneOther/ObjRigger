@@ -2,7 +2,11 @@
 use std::env::args;
 #[cfg(feature = "debug")]
 use std::env::vars;
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
+use std::thread::sleep;
+use std::time::Duration;
 use nalgebra::{Rotation3, Vector3};
 use tobj::LoadOptions;
 
@@ -56,6 +60,8 @@ fn main() {
 			return
 		}
 	};
+
+	let mut output = String::new();
 
 	for model in &obj_data {
 		let ref_model = match ref_data.iter().find(|x| x.name == model.name) {
@@ -122,9 +128,9 @@ fn main() {
 			model_verts[i] = global_transform * model_verts[i] + ref_origin;
 		}
 
-		println!("[{}]", model.name);
-		println!("Position={},{},{}", ref_origin.x, ref_origin.y, ref_origin.z);
-		println!("Rotation={},{},{}\n", global_angle.0.to_degrees(), global_angle.1.to_degrees(), global_angle.2.to_degrees());
+		output += format!("[{}]", model.name).as_str();
+		output += format!("Position={},{},{}", ref_origin.x, ref_origin.y, ref_origin.z).as_str();
+		output += format!("Rotation={},{},{}\n", global_angle.0.to_degrees(), global_angle.1.to_degrees(), global_angle.2.to_degrees()).as_str();
 
 		#[cfg(feature = "debug")]
 		{
@@ -134,6 +140,27 @@ fn main() {
 			println!("Average point delta: {}", get_avg_delta(&model_verts, &ref_verts));
 		}
 	}
+
+	let mut out = match File::create("output.txt") {
+		Ok(f) => f,
+		Err(e) => {
+			println!("Failed to open output file: {}\nWaiting for 30 seconds, copy results now.", e);
+			sleep(Duration::from_secs(30));
+			return;
+		}
+	};
+
+	match out.write_all(output.as_bytes()) {
+		Ok(_) => {},
+		Err(e) => {
+			println!("Failed to write to output file: {}\nWaiting for 30 seconds, copy results now.", e);
+			sleep(Duration::from_secs(30));
+			return;
+		}
+	}
+
+	println!("Outputted result to file \"output.txt\", this window will remain open for thirty seconds for you to copy the results manually.");
+	sleep(Duration::from_secs(30));
 }
 
 
